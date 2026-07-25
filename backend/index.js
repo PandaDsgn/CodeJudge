@@ -1,4 +1,5 @@
 require('dotenv').config();
+console.log('DATABASE_URL is set:', !!process.env.DATABASE_URL, 'length:', process.env.DATABASE_URL?.length || 0);
 const express = require('express');
 const cookieParser = require('cookie-parser');
 const { Pool } = require('pg');
