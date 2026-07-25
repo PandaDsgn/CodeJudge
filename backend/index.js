@@ -1,5 +1,10 @@
 require('dotenv').config();
-console.log('DATABASE_URL is set:', !!process.env.DATABASE_URL, 'length:', process.env.DATABASE_URL?.length || 0);
+const dns = require('dns');
+// Render's network doesn't support outbound IPv6, but Node 18+ resolves
+// hostnames with both A/AAAA records (like smtp.gmail.com) IPv6-first by
+// default — that mismatch is what caused ENETUNREACH connecting to Gmail.
+// Forcing IPv4-first here fixes it without touching the nodemailer config.
+dns.setDefaultResultOrder('ipv4first');
 const express = require('express');
 const cookieParser = require('cookie-parser');
 const { Pool } = require('pg');
