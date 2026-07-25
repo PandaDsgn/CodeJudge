@@ -1,0 +1,131 @@
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
+import { useTheme } from '../hooks/useTheme';
+import ThemeToggle from '../components/ThemeToggle';
+import SpaceSwitcher from '../components/SpaceSwitcher';
+import { useAuth } from '../context/AuthContext';
+import { API } from '../config';
+
+const DIFFICULTY_CLASS = { Easy: 'chip-easy', Medium: 'chip-medium', Hard: 'chip-hard' };
+const STATUS_CLASS = { open: 'chip-easy', closed: 'chip-hard' }; // reuse existing green/red chip colors
+
+// Formats the gap between `now` and `closesAt` as a short "time left" string.
+// Returns null when there's nothing meaningful to show (no deadline set,
+// or the assignment isn't open), so the caller can skip rendering it.
+function formatTimeLeft(closesAt, now) {
+  if (!closesAt) return null;
+  const diffMs = new Date(closesAt).getTime() - now;
+  if (diffMs <= 0) return null;
+
+  const minutes = Math.floor(diffMs / 60000);
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  const mins = minutes % 60;
+
+  if (days > 0) return `${days}d ${hours}h left`;
+  if (hours > 0) return `${hours}h ${mins}m left`;
+  if (mins > 0) return `${mins}m left`;
+  return 'Closing soon';
+}
+
+export default function Problems() {
+  const navigate = useNavigate();
+  const { theme, toggleTheme } = useTheme();
+
+  const [problems, setProblems] = useState(null);
+  const [loadError, setLoadError] = useState('');
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const fetchProblems = async () => {
+      try {
+        const response = await axios.get(`${API}/api/problems`, {
+          withCredentials: true,
+        });
+        setProblems(response.data.problems);
+      } catch (err) {
+        console.error('Failed to fetch problems', err);
+        setLoadError('Could not load problems. Is the backend server running?');
+      }
+    };
+
+    fetchProblems();
+  }, []);
+
+  // Ticks the countdown forward every 30s. Deliberately not more frequent
+  // than that â€” a live per-second clock on a list page is more distracting
+  // than useful, and this still keeps "Xm left" reasonably accurate.
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const { logout } = useAuth();
+  const handleLogout = async () => {
+    await logout();
+    navigate('/');
+  };
+
+  return (
+    <div className="sb-shell">
+      <header className="sb-topbar">
+        <button type="button" className="brand" onClick={() => navigate('/')}>CodeJudge</button>
+        <div className="sb-actions">
+          <SpaceSwitcher activeTab="assignments" />
+          <ThemeToggle theme={theme} onToggle={toggleTheme} />
+          <button type="button" className="btn btn-ghost" onClick={handleLogout}>
+            Log out
+          </button>
+        </div>
+      </header>
+
+      <section className="problems-list">
+        <h1 className="problems-title">Assignments</h1>
+        <p className="problems-sub">Pick a problem to open it in the sandbox.</p>
+
+        {loadError && (
+          <div className="alert" role="alert">
+            <span className="alert-icon">!</span>
+            <span>{loadError}</span>
+          </div>
+        )}
+
+        {!problems && !loadError && <p className="sb-loading">Loading problems…</p>}
+
+        {problems && problems.length === 0 && (
+          <p className="sb-loading">No assignments yet.</p>
+        )}
+
+        {problems && problems.length > 0 && (
+          <div className="problem-cards">
+            {problems.map((p) => {
+              const timeLeft = p.status === 'open' ? formatTimeLeft(p.closes_at, now) : null;
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  className="problem-card"
+                  onClick={() => navigate(`/assignments/${p.id}`)}
+                >
+                  <span className="problem-card-title">{p.title}</span>
+                  <span className="problem-card-badges">
+                    <span className={`chip ${DIFFICULTY_CLASS[p.difficulty] || 'chip-medium'}`}>
+                      <span className="dot" />
+                      {p.difficulty}
+                    </span>
+                    <span className={`chip ${STATUS_CLASS[p.status] || 'chip-medium'}`}>
+                      <span className="dot" />
+                      {p.status === 'open' ? 'Open' : 'Closed'}
+                    </span>
+                    {timeLeft && <span className="problem-card-timeleft">{timeLeft}</span>}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}

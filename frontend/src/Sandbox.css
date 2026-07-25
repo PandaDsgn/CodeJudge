@@ -1,0 +1,189 @@
+/* ---------- sample test cards (legacy/fallback) ---------- */
+.sample-tests {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 20px 0;
+}
+
+.sample-test-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sample-test-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 13px;
+}
+
+.sample-test-label {
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+  width: 110px;
+}
+
+.sample-test-row code {
+  font-family: var(--font-mono);
+  color: var(--text-h);
+  word-break: break-word;
+}
+
+.sample-test-card .btn { align-self: flex-start; margin-top: 2px; }
+
+.field-group-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.btn-sm { padding: 6px 12px; font-size: 12.5px; }
+
+
+/* ---------- LeetCode Style Test Case Pane ---------- */
+.sandbox-right {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lc-editor {
+  flex: 3;
+  min-height: 250px;
+}
+
+.tc-panel {
+  flex: 2;
+  min-height: 200px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.tc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.tc-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+
+.tc-verdict {
+  font-weight: 700;
+  font-size: 14px;
+}
+.text-green { color: var(--teal); }
+.text-red { color: var(--danger); }
+
+.tc-nav {
+  display: flex;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.tc-tab {
+  display: inline-flex;
+  align-items: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.tc-tab.active {
+  background: var(--surface-3);
+  color: var(--text-h);
+  border-color: var(--border-strong);
+}
+
+/* Status Indicators on Tabs */
+.tc-tab.status-pass::before,
+.tc-tab.status-fail::before,
+.tc-tab.status-pending::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 6px;
+  transform: translateY(-1px);
+}
+.tc-tab.status-pass::before { background: var(--teal); box-shadow: 0 0 6px var(--teal); }
+.tc-tab.status-fail::before { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
+.tc-tab.status-pending::before { background: var(--accent); animation: pulse 1s infinite; }
+
+.tc-tab.status-pass.active { border-color: rgba(79, 209, 197, 0.5); background: var(--teal-dim); }
+.tc-tab.status-fail.active { border-color: rgba(255, 92, 92, 0.5); background: var(--danger-dim); }
+
+.tc-body {
+  padding: 14px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.tc-row {
+  margin-bottom: 14px;
+}
+
+.tc-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+
+.tc-block {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-h);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tc-block.error { color: var(--danger); background: var(--danger-dim); border-color: rgba(255, 92, 92, 0.2); }
+.tc-block.error-soft { color: #ff8a8a; }
+
+.tc-empty, .tc-hidden-msg {
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: center;
+  margin-top: 24px;
+}
