@@ -22,7 +22,7 @@ app.use(cookieParser()); // needed so req.cookies works â€” required by aut
 const cors = require('cors');
 app.use(cors({
   origin: ['http://localhost:5173',
-  'https://pandadsgn.github.io',],
+  'https://pandadsgn.github.io', 'https://codejudge.page', 'https://www.codejudge.page'],
   credentials: true
 }));
 
