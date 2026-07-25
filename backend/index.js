@@ -12,7 +12,7 @@ const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const fs = require('fs');
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 const { exec } = require('child_process');
 const path = require('path');
 
@@ -45,14 +45,15 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 });
 
-// Configure Nodemailer for automated email sending
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
+// Email sending via Resend's HTTPS API instead of raw SMTP — Render blocks
+// outbound traffic on SMTP ports 25/465/587 for free web services (since
+// Sep 2025), which is what made nodemailer/Gmail time out. Resend just makes
+// a normal HTTPS request, so it isn't affected by that restriction.
+const resend = new Resend(process.env.RESEND_API_KEY);
+// Until you verify your own domain in the Resend dashboard, you can only
+// send FROM this address, and only TO the email you signed up to Resend
+// with — see the note further down where this is used.
+const EMAIL_FROM = process.env.EMAIL_FROM || 'CodeJudge <onboarding@resend.dev>';
 
 /**
  * Utility: Generates a cryptographically secure 10-character alphanumeric password
@@ -449,12 +450,13 @@ app.post('/api/webhook/google-form', async (req, res) => {
       [email, hashedPassword, 'student']
     );
 
-    await transporter.sendMail({
-      from: `"CodeJudge Admin" <${process.env.EMAIL_USER}>`,
+    const { error: emailError } = await resend.emails.send({
+      from: EMAIL_FROM,
       to: email,
       subject: 'Your CodeJudge Account Credentials',
       text: `Hello ${name || 'Student'},\n\nYour CodeJudge account is ready!\n\nYour temporary password is: ${rawPassword}\n\nPlease log in and change your password after logging in.`,
     });
+    if (emailError) throw emailError;
 
     const date = new Date().toISOString().split('T')[0];
     const logEntry = `"${name || 'N/A'}","${email}","${rawPassword}","${date}"\n`;
@@ -576,12 +578,13 @@ app.post('/api/forgot-password', async (req, res) => {
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const resetLink = `${frontendUrl}/reset-password?token=${resetToken}`;
 
-    await transporter.sendMail({
-      from: `"CodeJudge Admin" <${process.env.EMAIL_USER}>`,
+    const { error: emailError } = await resend.emails.send({
+      from: EMAIL_FROM,
       to: email,
       subject: 'CodeJudge Password Reset',
       text: `You requested a password reset.\n\nClick here to reset it: ${resetLink}\n\nThis link expires in 1 hour.`
     });
+    if (emailError) throw emailError;
 
     res.status(200).json({ message: 'If that email exists, a reset link was sent.' });
   } catch (error) {
