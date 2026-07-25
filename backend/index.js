@@ -444,11 +444,26 @@ app.post('/api/webhook/google-form', async (req, res) => {
     const rawPassword = generateRandomPassword();
     const hashedPassword = await bcrypt.hash(rawPassword, 10);
 
-    await pool.query(
+    // ON CONFLICT DO NOTHING means a repeat form submission for an email that
+    // already has an account is silently skipped in the DB — but rawPassword
+    // above was never saved for that case, so we must NOT email it out, or
+    // the student gets a password that doesn't match what's stored. RETURNING
+    // tells us whether a row was actually inserted this time.
+    const insertResult = await pool.query(
       `INSERT INTO users (email, password_hash, role)
-       VALUES ($1, $2, $3) ON CONFLICT (email) DO NOTHING`,
+       VALUES ($1, $2, $3) ON CONFLICT (email) DO NOTHING
+       RETURNING id`,
       [email, hashedPassword, 'student']
     );
+
+    if (insertResult.rows.length === 0) {
+      // Account already existed — don't send a temp password that won't work.
+      // Point them at "forgot password" instead, which is the correct flow
+      // for an existing account regardless of whether they remember their
+      // current password.
+      console.log(`â„¹ï¸ Skipped onboarding email for ${email} â€” account already exists`);
+      return res.status(200).send('Account already exists, no email sent');
+    }
 
     const { error: emailError } = await resend.emails.send({
       from: EMAIL_FROM,
@@ -457,14 +472,6 @@ app.post('/api/webhook/google-form', async (req, res) => {
       text: `Hello ${name || 'Student'},\n\nYour CodeJudge account is ready!\n\nYour temporary password is: ${rawPassword}\n\nPlease log in and change your password after logging in.`,
     });
     if (emailError) throw emailError;
-
-    const date = new Date().toISOString().split('T')[0];
-    const logEntry = `"${name || 'N/A'}","${email}","${rawPassword}","${date}"\n`;
-
-    if (!fs.existsSync('admin_passwords.csv')) {
-      fs.writeFileSync('admin_passwords.csv', 'Name,Email,RawPassword,Date\n');
-    }
-    fs.appendFileSync('admin_passwords.csv', logEntry);
 
     console.log(`âœ… Automated Onboarding Complete for: ${email}`);
     res.status(200).send('Success');
@@ -576,7 +583,10 @@ app.post('/api/forgot-password', async (req, res) => {
     // This has to point at the frontend (Vite/React app), not the backend API â€”
     // there's no route on port 3000 for a user to actually land on.
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    const resetLink = `${frontendUrl}/reset-password?token=${resetToken}`;
+    // App.jsx uses HashRouter, so the route only matches with a /#/ prefix —
+    // without it, the browser just loads the SPA shell at "/" and React
+    // Router never sees "/reset-password" at all.
+    const resetLink = `${frontendUrl}/#/reset-password?token=${resetToken}`;
 
     const { error: emailError } = await resend.emails.send({
       from: EMAIL_FROM,
