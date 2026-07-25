@@ -15,7 +15,8 @@ app.use(express.json());
 app.use(cookieParser()); // needed so req.cookies works â€” required by authenticateToken below
 const cors = require('cors');
 app.use(cors({
-  origin: 'http://localhost:5173',
+  origin: ['http://localhost:5173',
+  'https://PandaDsgn.github.io',],
   credentials: true
 }));
 
@@ -492,7 +493,8 @@ app.post('/api/login', async (req, res) => {
 
     res.cookie('token', token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: true,           // must be true for SameSite: 'none' to work — not conditional on NODE_ENV
+      sameSite: 'none',
       maxAge: 24 * 60 * 60 * 1000,
     });
 
