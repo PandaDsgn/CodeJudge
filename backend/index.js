@@ -16,7 +16,7 @@ app.use(cookieParser()); // needed so req.cookies works â€” required by aut
 const cors = require('cors');
 app.use(cors({
   origin: ['http://localhost:5173',
-  'https://PandaDsgn.github.io',],
+  'https://pandadsgn.github.io',],
   credentials: true
 }));
 
