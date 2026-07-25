@@ -124,10 +124,18 @@ const LANGUAGE_CONFIG = {
   },
   java: {
     filename: 'Main.java',
-    buildCmd: ['javac', ['Main.java']],
-    runCmd: ['java', ['Main']],
+    // -J-Xmx / -Xmx cap the JVM's actual heap usage directly â€” this is the
+    // correct way to limit Java memory. ulimit -v (virtual address space) is
+    // NOT used for Java: JVMs reserve huge virtual address ranges on startup
+    // (heap headroom, metaspace, JIT code cache, thread stacks) regardless of
+    // real usage, so a tight -v limit kills the JVM before it can even print
+    // an error â€” which is exactly what an empty-stderr "Compilation failed"
+    // with no compiler output means.
+    buildCmd: ['javac', ['-J-Xmx256m', 'Main.java']],
+    runCmd: ['java', ['-Xmx256m', 'Main']],
     memKb: 262144,  // JVM baseline overhead is real â€” give it room
     cpuSec: 8,
+    noVirtualMemLimit: true,
   },
 };
 
@@ -155,7 +163,7 @@ const { spawn } = require('child_process');
  * standalone binary, so it has to be set inside `sh -c` before exec'ing
  * the real program). Resolves { code, stdout, stderr, timedOut }.
  */
-function runLimited(cwd, memKb, cpuSec, [cmd, args], stdinData = '') {
+function runLimited(cwd, memKb, cpuSec, [cmd, args], stdinData = '', skipVirtualMemLimit = false) {
   return new Promise((resolve) => {
     const quotedArgs = args.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(' ');
     // -v and -u are Linux-only here. -v breaks dyld's shared-library loading
@@ -167,9 +175,15 @@ function runLimited(cwd, memKb, cpuSec, [cmd, args], stdinData = '') {
     // and safe on Linux (production), where the container has its own
     // isolated process namespace with nothing else running under that uid.
     const isMac = process.platform === 'darwin';
-    const memLimitLine = isMac ? '' : `ulimit -v ${memKb};`;
-    const procLimitLine = isMac ? '' : `ulimit -u 32;`;
-    const shellLine = `${memLimitLine} ulimit -t ${cpuSec}; ${procLimitLine} ulimit -f 2048; exec ${cmd} ${quotedArgs}`;
+    // Each ulimit call is wrapped with `2>/dev/null || true` so an unsupported
+    // flag on whatever /bin/sh is actually running this (dash, BusyBox ash,
+    // etc. all differ slightly) can never abort the script or leak a shell
+    // error into stderr where it'd look like the program itself failed. The
+    // limit just silently doesn't apply on shells that don't support it,
+    // rather than breaking every submission in that language.
+    const memLimitLine = (isMac || skipVirtualMemLimit) ? '' : `ulimit -v ${memKb} 2>/dev/null || true;`;
+    const procLimitLine = isMac ? '' : `ulimit -u 32 2>/dev/null || true;`;
+    const shellLine = `${memLimitLine} ulimit -t ${cpuSec} 2>/dev/null || true; ${procLimitLine} ulimit -f 2048 2>/dev/null || true; exec ${cmd} ${quotedArgs}`;
 
     const child = spawn('sh', ['-c', shellLine], {
       cwd,
@@ -190,8 +204,21 @@ function runLimited(cwd, memKb, cpuSec, [cmd, args], stdinData = '') {
       resolve({ code, stdout, stderr, timedOut });
     });
 
-    child.stdin.write(stdinData ?? '');
-    child.stdin.end();
+    // If the child exits (or never reads stdin at all) before this write
+    // finishes, the pipe closes underneath us and .write() throws EPIPE.
+    // Without this handler that's an UNCAUGHT exception that crashes the
+    // entire Node process â€” not just this one request â€” taking every
+    // student's session down with it. The 'close' listener above still
+    // resolves this promise normally either way, so silently swallowing the
+    // write error here is safe: we just don't fail to deliver stdin to a
+    // process that was never going to read it anyway.
+    child.stdin.on('error', () => {});
+    try {
+      child.stdin.write(stdinData ?? '');
+      child.stdin.end();
+    } catch {
+      // Same reasoning as above â€” pipe already gone, nothing to do.
+    }
   });
 }
 
@@ -228,14 +255,14 @@ async function executeInSandboxRaw(language, code, stdin = '') {
   }
 
   if (config.buildCmd) {
-    const build = await runLimited(executionDir, config.memKb, config.cpuSec, config.buildCmd);
+    const build = await runLimited(executionDir, config.memKb, config.cpuSec, config.buildCmd, '', config.noVirtualMemLimit);
     if (build.code !== 0) {
       cleanup();
       return { success: false, timedOut: build.timedOut, output: '', error: build.stderr || 'Compilation failed' };
     }
   }
 
-  const run = await runLimited(executionDir, config.memKb, config.cpuSec, config.runCmd, stdin);
+  const run = await runLimited(executionDir, config.memKb, config.cpuSec, config.runCmd, stdin, config.noVirtualMemLimit);
   cleanup();
 
   if (run.timedOut) {
@@ -469,7 +496,7 @@ app.post('/api/webhook/google-form', async (req, res) => {
       from: EMAIL_FROM,
       to: email,
       subject: 'Your CodeJudge Account Credentials',
-      text: `Hello ${name || 'Student'},\n\nYour CodeJudge account is ready!\n\nYour temporary password is: ${rawPassword}\n\nPlease log in to https://codejudge.page and change your password after logging in.`,
+      text: `Hello ${name || 'Student'},\n\nYour CodeJudge account is ready!\n\nYour temporary password is: ${rawPassword}\n\nLogin via https://codejudge.page\n\nPlease log in and change your password after logging in.`,
     });
     if (emailError) throw emailError;
 
@@ -1008,6 +1035,20 @@ app.post('/api/problems/:id/submit', authenticateToken, async (req, res) => {
     console.error('Submission error:', err);
     res.status(500).json({ error: 'Failed to grade submission' });
   }
+});
+
+// Safety net for a server whose whole job is running arbitrary student code:
+// child_process interactions (closed pipes, unexpected signals, timing races)
+// are inherently more prone to unforeseen edge cases than typical API code.
+// Without this, ANY single uncaught error anywhere â€” not just in the sandbox
+// â€” kills the entire Node process and takes every student's session down
+// with it, possibly mid-deadline. Logging and staying alive is far safer
+// than the default "crash the whole server" behavior for this kind of app.
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception (server stayed alive):', err);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled promise rejection (server stayed alive):', err);
 });
 
 const PORT = process.env.PORT || 3000;
