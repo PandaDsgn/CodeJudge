@@ -32,8 +32,12 @@ if (!fs.existsSync(tempDir)) {
 }
 
 // Initialize PostgreSQL Connection Pool
+// ssl is required for Neon (and most hosted Postgres) even when sslmode=require
+// is already in the connection string — this is a belt-and-braces fallback so
+// pg doesn't reject Neon's cert chain.
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
 });
 
 // Configure Nodemailer for automated email sending
