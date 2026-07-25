@@ -469,7 +469,7 @@ app.post('/api/webhook/google-form', async (req, res) => {
       from: EMAIL_FROM,
       to: email,
       subject: 'Your CodeJudge Account Credentials',
-      text: `Hello ${name || 'Student'},\n\nYour CodeJudge account is ready!\n\nYour temporary password is: ${rawPassword}\n\nPlease log in and change your password after logging in.`,
+      text: `Hello ${name || 'Student'},\n\nYour CodeJudge account is ready!\n\nYour temporary password is: ${rawPassword}\n\nPlease log in to https://codejudge.page and change your password after logging in.`,
     });
     if (emailError) throw emailError;
 
