@@ -16,7 +16,7 @@ export default function Login() {
 
   const navigate = useNavigate();
   const { theme, toggleTheme } = useTheme();
-  const { setUser } = useAuth();
+  const { login } = useAuth();
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -26,12 +26,11 @@ export default function Login() {
     try {
       const response = await axios.post(
         `${API}/api/login`,
-        { email, password },
-        { withCredentials: true }
+        { email, password }
       );
 
       if (response.status === 200) {
-        setUser(response.data.user);
+        login(response.data.token, response.data.user);
         navigate(response.data.user.role === 'admin' ? '/admin' : '/assignments');
       }
     } catch (err) {

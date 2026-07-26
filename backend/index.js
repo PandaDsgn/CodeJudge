@@ -6,7 +6,6 @@ const dns = require('dns');
 // Forcing IPv4-first here fixes it without touching the nodemailer config.
 dns.setDefaultResultOrder('ipv4first');
 const express = require('express');
-const cookieParser = require('cookie-parser');
 const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
@@ -18,7 +17,6 @@ const path = require('path');
 
 const app = express();
 app.use(express.json());
-app.use(cookieParser()); // needed so req.cookies works â€” required by authenticateToken below
 const cors = require('cors');
 app.use(cors({
   origin: ['http://localhost:5173',
@@ -82,7 +80,13 @@ function generateRandomPassword(length = 10) {
  * previously nothing did, which meant /api/execute/* was callable by anyone, logged in or not.
  */
 function authenticateToken(req, res, next) {
-  const token = req.cookies?.token;
+  // Authorization header, not a cookie â€” deliberately. Frontend (github.io)
+  // and backend (onrender.com) don't share a domain, and iOS forces every
+  // browser onto WebKit, which blocks third-party cookies unconditionally.
+  // A Bearer token in a header carries none of that baggage, on any browser,
+  // on any device, today or as cookie policies keep tightening in future.
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
   if (!token) {
     return res.status(401).json({ error: 'Not authenticated' });
   }
@@ -542,15 +546,12 @@ app.post('/api/login', async (req, res) => {
       { expiresIn: process.env.JWT_EXPIRATION || '24h' }
     );
 
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: true,           // must be true for SameSite: 'none' to work — not conditional on NODE_ENV
-      sameSite: 'none',
-      maxAge: 24 * 60 * 60 * 1000,
-    });
-
+    // Returned in the body, not set as a cookie â€” see authenticateToken for
+    // why. The frontend stores this and attaches it as an Authorization
+    // header on every request from here on.
     res.status(200).json({
       message: 'Login successful',
+      token,
       user: {
         id: user.id,
         email: user.email,
@@ -571,7 +572,6 @@ app.get('/api/me', authenticateToken, async (req, res) => {
     const result = await pool.query('SELECT id, email, role FROM users WHERE id = $1', [req.user.userId]);
     if (result.rows.length === 0) {
       // Token is still valid but the account behind it is gone (e.g. admin removed them)
-      res.clearCookie('token');
       return res.status(401).json({ error: 'Session no longer valid' });
     }
     res.status(200).json({ user: result.rows[0] });
@@ -581,8 +581,11 @@ app.get('/api/me', authenticateToken, async (req, res) => {
   }
 });
 
+// Stateless token, so there's nothing server-side to invalidate here â€” the
+// frontend just discards the token from localStorage. This route stays
+// mainly so AuthContext has a consistent place to call, and so a future
+// token-blacklist (if ever needed) has a natural home.
 app.post('/api/logout', authenticateToken, (req, res) => {
-  res.clearCookie('token');
   res.status(200).json({ message: 'Logged out' });
 });
 
