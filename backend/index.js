@@ -54,6 +54,11 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 // send FROM this address, and only TO the email you signed up to Resend
 // with — see the note further down where this is used.
 const EMAIL_FROM = process.env.EMAIL_FROM || 'CodeJudge <onboarding@resend.dev>';
+// Single source of truth for the deployed frontend URL, used by every email
+// that needs to link back into the app (credentials email, reset-password
+// email). Defined once so changing domains later only means updating one
+// env var, not hunting down every hardcoded link across the file.
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 
 /**
  * Utility: Generates a cryptographically secure 10-character alphanumeric password
@@ -496,7 +501,7 @@ app.post('/api/webhook/google-form', async (req, res) => {
       from: EMAIL_FROM,
       to: email,
       subject: 'Your CodeJudge Account Credentials',
-      text: `Hello ${name || 'Student'},\n\nYour CodeJudge account is ready!\n\nYour temporary password is: ${rawPassword}\n\nLogin via https://codejudge.page\n\nPlease log in and change your password after logging in.`,
+      text: `Hello ${name || 'Student'},\n\nYour CodeJudge account is ready!\n\nYour temporary password is: ${rawPassword}\n\nLogin via ${FRONTEND_URL}\n\nPlease log in and change your password after logging in.`,
     });
     if (emailError) throw emailError;
 
@@ -609,11 +614,10 @@ app.post('/api/forgot-password', async (req, res) => {
 
     // This has to point at the frontend (Vite/React app), not the backend API â€”
     // there's no route on port 3000 for a user to actually land on.
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     // App.jsx uses HashRouter, so the route only matches with a /#/ prefix —
     // without it, the browser just loads the SPA shell at "/" and React
     // Router never sees "/reset-password" at all.
-    const resetLink = `${frontendUrl}/#/reset-password?token=${resetToken}`;
+    const resetLink = `${FRONTEND_URL}/#/reset-password?token=${resetToken}`;
 
     const { error: emailError } = await resend.emails.send({
       from: EMAIL_FROM,

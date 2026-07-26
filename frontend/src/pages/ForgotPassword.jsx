@@ -43,7 +43,7 @@ export default function ForgotPassword() {
         </div>
 
         <h2 className="auth-title">Reset your password</h2>
-        <p className="auth-sub">Enter your student email and we'll send you a reset link.</p>
+        <p className="auth-sub">Enter your registered email and we'll send you a reset link.</p>
 
         {status === 'sent' ? (
           <div className="alert alert-success" role="status">
