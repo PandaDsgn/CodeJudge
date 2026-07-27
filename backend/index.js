@@ -826,6 +826,116 @@ app.post('/api/admin/problems', authenticateToken, requireAdmin, async (req, res
 });
 
 // ============================================================================
+// 7a-1. ADMIN: Fetch one assignment's full editable details (incl. hidden
+// test cases) â€” used by AdminDashboard's "Edit" button to pre-fill the form.
+// ============================================================================
+app.get('/api/admin/problems/:id', authenticateToken, requireAdmin, async (req, res) => {
+  const problemId = req.params.id;
+  try {
+    const problemRes = await pool.query(
+      'SELECT id, title, difficulty, description, opens_at, closes_at FROM problems WHERE id = $1',
+      [problemId]
+    );
+    if (problemRes.rows.length === 0) return res.status(404).json({ error: 'Problem not found' });
+    const problem = problemRes.rows[0];
+
+    const codeRes = await pool.query(
+      'SELECT language, code FROM starter_code WHERE problem_id = $1',
+      [problemId]
+    );
+    const starterCode = {};
+    codeRes.rows.forEach((row) => { starterCode[row.language] = row.code; });
+
+    // Every test case, hidden ones included â€” unlike the student-facing
+    // GET /api/problems/:id, which only returns visible samples.
+    const testCasesRes = await pool.query(
+      'SELECT input, expected_output, is_hidden FROM test_cases WHERE problem_id = $1 ORDER BY id ASC',
+      [problemId]
+    );
+    const testCases = testCasesRes.rows.map((tc) => ({
+      input: tc.input,
+      expectedOutput: tc.expected_output,
+      isHidden: tc.is_hidden,
+    }));
+
+    res.status(200).json({
+      title: problem.title,
+      difficulty: problem.difficulty,
+      description: problem.description,
+      starterCode,
+      testCases,
+      opensAt: problem.opens_at,
+      closesAt: problem.closes_at,
+    });
+  } catch (err) {
+    console.error('Fetch full problem error:', err);
+    res.status(500).json({ error: 'Failed to load assignment details' });
+  }
+});
+
+// ============================================================================
+// 7a-2. ADMIN: Full update of an assignment â€” title, difficulty, description,
+// starter code, and the complete set of test cases (full replace). Used by
+// AssignmentForm's edit-mode submit.
+// ============================================================================
+app.put('/api/admin/problems/:id', authenticateToken, requireAdmin, async (req, res) => {
+  const problemId = req.params.id;
+  const { title, difficulty, description, starterCode = {}, testCases = [], opensAt = null, closesAt = null } = req.body;
+
+  if (!title || !difficulty || !description) {
+    return res.status(400).json({ error: 'Title, difficulty, and description are required' });
+  }
+  if (!Array.isArray(testCases) || testCases.length === 0) {
+    return res.status(400).json({ error: 'At least one test case is required' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const existing = await client.query('SELECT id FROM problems WHERE id = $1', [problemId]);
+    if (existing.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Problem not found' });
+    }
+
+    await client.query(
+      `UPDATE problems SET title = $1, difficulty = $2, description = $3, opens_at = $4, closes_at = $5 WHERE id = $6`,
+      [title, difficulty, description, opensAt, closesAt, problemId]
+    );
+
+    // Starter code and test cases are fully replaced rather than diffed â€”
+    // matches how AssignmentForm sends its payload (the whole set at once).
+    await client.query('DELETE FROM starter_code WHERE problem_id = $1', [problemId]);
+    for (const [language, code] of Object.entries(starterCode)) {
+      if (!code) continue;
+      await client.query(
+        `INSERT INTO starter_code (problem_id, language, code) VALUES ($1, $2, $3)`,
+        [problemId, language, code]
+      );
+    }
+
+    await client.query('DELETE FROM test_cases WHERE problem_id = $1', [problemId]);
+    for (const testCase of testCases) {
+      if (!testCase.expectedOutput) continue;
+      await client.query(
+        `INSERT INTO test_cases (problem_id, input, expected_output, is_hidden) VALUES ($1, $2, $3, $4)`,
+        [problemId, testCase.input || '', testCase.expectedOutput, testCase.isHidden !== false]
+      );
+    }
+
+    await client.query('COMMIT');
+    res.status(200).json({ message: 'Assignment updated successfully', problemId });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Problem update error:', error);
+    res.status(500).json({ error: 'Failed to update assignment' });
+  } finally {
+    client.release();
+  }
+});
+
+// ============================================================================
 // 7b. ADMIN: Open/close an assignment's time slot
 // ============================================================================
 // Only touches the field(s) actually present in the body, so you can e.g. close
