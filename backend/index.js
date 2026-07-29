@@ -43,6 +43,28 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 });
 
+// Auto-provisions the time-tracking table if it doesn't exist yet, so
+// "true time on task" tracking (see POST /api/problems/:id/time-log) works
+// immediately on deploy without a manual migration step. One row per
+// (user, problem), accumulated across every visit — not per-attempt, since a
+// student can spend time reading/re-reading a problem between submissions.
+async function ensureTimeTrackingSchema() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS problem_time_logs (
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        problem_id INTEGER NOT NULL REFERENCES problems(id) ON DELETE CASCADE,
+        total_seconds INTEGER NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (user_id, problem_id)
+      )
+    `);
+  } catch (err) {
+    console.error('Failed to ensure time-tracking schema:', err);
+  }
+}
+ensureTimeTrackingSchema();
+
 // Email sending via Resend's HTTPS API instead of raw SMTP — Render blocks
 // outbound traffic on SMTP ports 25/465/587 for free web services (since
 // Sep 2025), which is what made nodemailer/Gmail time out. Resend just makes
@@ -352,6 +374,16 @@ app.post('/api/admin/create-student', authenticateToken, requireAdmin, async (re
 // ============================================================================
 app.get('/api/admin/students', authenticateToken, requireAdmin, async (req, res) => {
   try {
+    // Optional ?problemId=<n> scopes every metric below to a single
+    // assignment instead of aggregating across all of them — lets the admin
+    // panel sort "who's doing well on Assignment 3" instead of only overall.
+    // $1::int IS NULL is a deliberate pass-through: when problemId isn't
+    // given, every join condition below is a no-op and the query returns
+    // the exact same combined totals it always has.
+    const problemId = req.query.problemId && !Number.isNaN(Number(req.query.problemId))
+      ? Number(req.query.problemId)
+      : null;
+
     const result = await pool.query(`
       SELECT
         u.id,
@@ -359,14 +391,55 @@ app.get('/api/admin/students', authenticateToken, requireAdmin, async (req, res)
         u.created_at,
         COUNT(DISTINCT s.problem_id) FILTER (WHERE s.status = 'Accepted')::int AS problems_solved,
         COUNT(s.id)::int AS total_submissions,
-        MAX(s.created_at) AS last_submission_at
+        MAX(s.created_at) AS last_submission_at,
+        COALESCE(t.total_seconds, 0)::int AS total_seconds,
+        GREATEST(MAX(s.created_at), t.last_time_log_at) AS last_active_at,
+        COALESCE(best.successful_test_cases, 0)::int AS successful_test_cases
       FROM users u
-      LEFT JOIN submissions s ON s.user_id = u.id
+      LEFT JOIN submissions s
+        ON s.user_id = u.id AND ($1::int IS NULL OR s.problem_id = $1)
+      -- Time-on-task, summed across every problem the student has opened
+      -- (or just the one problem, when scoped).
+      LEFT JOIN (
+        SELECT user_id,
+               SUM(total_seconds)::int AS total_seconds,
+               MAX(updated_at) AS last_time_log_at
+        FROM problem_time_logs
+        WHERE $1::int IS NULL OR problem_id = $1
+        GROUP BY user_id
+      ) t ON t.user_id = u.id
+      -- "Successful test cases run" = test cases passed on each problem's BEST
+      -- attempt (highest passed_count, Accepted breaking ties), summed across
+      -- problems — same "best, not latest" rule used on the student-facing
+      -- assignments list, so a weaker retry afterward can't lower this.
+      LEFT JOIN (
+        SELECT user_id, SUM(passed_count)::int AS successful_test_cases
+        FROM (
+          SELECT DISTINCT ON (user_id, problem_id) user_id, problem_id, passed_count
+          FROM submissions
+          WHERE $1::int IS NULL OR problem_id = $1
+          ORDER BY user_id, problem_id, (status = 'Accepted') DESC, passed_count DESC, created_at DESC
+        ) best_per_problem
+        GROUP BY user_id
+      ) best ON best.user_id = u.id
       WHERE u.role = 'student'
-      GROUP BY u.id, u.email, u.created_at
+      GROUP BY u.id, u.email, u.created_at, t.total_seconds, t.last_time_log_at, best.successful_test_cases
       ORDER BY u.email ASC
-    `);
-    res.status(200).json({ students: result.rows });
+    `, [problemId]);
+
+    // Composite "time:attempts:success" efficiency score — higher is better
+    // (more test cases passed, in fewer attempts, in less time). Ratio-based
+    // rather than a fixed weighted sum so it stays meaningful across classes
+    // of very different sizes/durations; tune the two `1 + ...` denominators
+    // below if you want attempts or time to matter more/less relative to
+    // successful test cases.
+    const students = result.rows.map((s) => {
+      const hours = s.total_seconds / 3600;
+      const compositeScore = s.successful_test_cases / ((1 + s.total_submissions) * (1 + hours));
+      return { ...s, composite_score: Number(compositeScore.toFixed(4)) };
+    });
+
+    res.status(200).json({ students });
   } catch (error) {
     console.error('List students error:', error);
     res.status(500).json({ error: 'Failed to load students' });
@@ -730,6 +803,31 @@ app.get('/api/problems', authenticateToken, async (req, res) => {
       ? withStatus
       : withStatus.filter((p) => p.status !== 'upcoming');
 
+    // Attach each student's own BEST submission per problem (most test cases
+    // passed, with an Accepted verdict breaking ties) so the list can render
+    // a pending / partial / accepted indicator without a second round-trip
+    // per card. "Best" rather than "latest" so a student's progress doesn't
+    // regress in the UI just because they re-ran a weaker attempt afterward.
+    if (visible.length > 0) {
+      const problemIds = visible.map((p) => p.id);
+      const bestRes = await pool.query(
+        `SELECT DISTINCT ON (problem_id) problem_id, status, passed_count, total_count, created_at
+         FROM submissions
+         WHERE user_id = $1 AND problem_id = ANY($2::int[])
+         ORDER BY problem_id, (status = 'Accepted') DESC, passed_count DESC, created_at DESC`,
+        [req.user.userId, problemIds]
+      );
+      const bestByProblem = {};
+      bestRes.rows.forEach((row) => { bestByProblem[row.problem_id] = row; });
+
+      visible.forEach((p) => {
+        const best = bestByProblem[p.id];
+        p.submission = best
+          ? { status: best.status, passed: best.passed_count, total: best.total_count }
+          : null;
+      });
+    }
+
     res.status(200).json({ problems: visible });
   } catch (err) {
     console.error('List problems error:', err);
@@ -765,10 +863,21 @@ app.get('/api/problems/:id', authenticateToken, async (req, res) => {
       [problemId]
     );
 
+    // How much time this student has already logged on this specific
+    // assignment (see problem_time_logs / POST /api/problems/:id/time-log).
+    // Sent back so the frontend timer can seed itself with the real running
+    // total instead of starting over at 0 every time the page is opened.
+    const timeRes = await pool.query(
+      'SELECT total_seconds FROM problem_time_logs WHERE user_id = $1 AND problem_id = $2',
+      [req.user.userId, problemId]
+    );
+    const timeSpentSeconds = timeRes.rows[0]?.total_seconds ?? 0;
+
     res.json({
       problem: { ...problemRes.rows[0], status },
       starterCode,
       samples: sampleRes.rows,
+      timeSpentSeconds,
     });
   } catch (err) {
     console.error(err);
@@ -1154,7 +1263,45 @@ app.post('/api/problems/:id/submit', authenticateToken, async (req, res) => {
   }
 });
 
-// Safety net for a server whose whole job is running arbitrary student code:
+// Accumulates real time-on-task for one (student, problem) pair. The
+// frontend calls this repeatedly with small deltas — on heartbeat, on the
+// tab going background, and on the page actually closing — rather than once
+// with a total, so a crashed tab or a closed laptop lid never loses more
+// than one heartbeat interval's worth of time. Deliberately NOT gated on the
+// assignment's open/closed window: time still counts if a student revisits
+// a closed assignment, and repeat visits keep adding to the same total.
+app.post('/api/problems/:id/time-log', authenticateToken, async (req, res) => {
+  const problemId = req.params.id;
+  const seconds = Number(req.body?.seconds);
+
+  // Nothing to record (0, negative, missing, or NaN) isn't an error — the
+  // tab may have been hidden the whole interval. Just acknowledge it.
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return res.status(200).json({ ok: true });
+  }
+
+  // Clamp each individual delta so a stale/suspended tab waking up (or a
+  // tampered client) can't inflate a student's tracked time in one call —
+  // this is well above the heartbeat interval the frontend actually uses.
+  const clamped = Math.min(Math.round(seconds), 300);
+
+  try {
+    await pool.query(
+      `INSERT INTO problem_time_logs (user_id, problem_id, total_seconds)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_id, problem_id)
+       DO UPDATE SET total_seconds = problem_time_logs.total_seconds + EXCLUDED.total_seconds,
+                     updated_at = now()`,
+      [req.user.userId, problemId, clamped]
+    );
+    res.status(200).json({ ok: true });
+  } catch (err) {
+    console.error('Time log error:', err);
+    res.status(500).json({ error: 'Failed to log time' });
+  }
+});
+
+
 // child_process interactions (closed pipes, unexpected signals, timing races)
 // are inherently more prone to unforeseen edge cases than typical API code.
 // Without this, ANY single uncaught error anywhere â€” not just in the sandbox

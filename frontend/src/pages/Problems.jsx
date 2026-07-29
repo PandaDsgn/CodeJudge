@@ -29,6 +29,22 @@ function formatTimeLeft(closesAt, now) {
   return 'Closing soon';
 }
 
+// Turns a student's best submission for a problem (see GET /api/problems,
+// which now attaches { status, passed, total }) into a small status chip:
+//   no submission yet        -> neutral "Not submitted"
+//   some but not all passing -> amber   "x/y passed"
+//   every case passing       -> green   "Accepted x/y"
+function submissionChip(submission) {
+  if (!submission) {
+    return { label: 'Not submitted', className: 'chip-neutral' };
+  }
+  const { status, passed, total } = submission;
+  if (status === 'Accepted' && passed === total) {
+    return { label: `Accepted ${passed}/${total}`, className: 'chip-easy' };
+  }
+  return { label: `${passed}/${total} passed`, className: 'chip-medium' };
+}
+
 export default function Problems() {
   const navigate = useNavigate();
   const { theme, toggleTheme } = useTheme();
@@ -99,8 +115,9 @@ export default function Problems() {
 
         {problems && problems.length > 0 && (
           <div className="problem-cards">
-            {problems.map((p) => {
+            {problems.map((p, idx) => {
               const timeLeft = p.status === 'open' ? formatTimeLeft(p.closes_at, now) : null;
+              const sub = submissionChip(p.submission);
               return (
                 <button
                   key={p.id}
@@ -108,7 +125,9 @@ export default function Problems() {
                   className="problem-card"
                   onClick={() => navigate(`/assignments/${p.id}`)}
                 >
-                  <span className="problem-card-title">{p.title}</span>
+                  <span className="problem-card-title">
+                    <span className="problem-card-index">{idx + 1}.</span> {p.title}
+                  </span>
                   <span className="problem-card-badges">
                     <span className={`chip ${DIFFICULTY_CLASS[p.difficulty] || 'chip-medium'}`}>
                       <span className="dot" />
@@ -117,6 +136,10 @@ export default function Problems() {
                     <span className={`chip ${STATUS_CLASS[p.status] || 'chip-medium'}`}>
                       <span className="dot" />
                       {p.status === 'open' ? 'Open' : 'Closed'}
+                    </span>
+                    <span className={`chip ${sub.className}`}>
+                      <span className="dot" />
+                      {sub.label}
                     </span>
                     {timeLeft && <span className="problem-card-timeleft">{timeLeft}</span>}
                   </span>

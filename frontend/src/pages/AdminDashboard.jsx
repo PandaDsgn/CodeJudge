@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, Fragment } from 'react';
+import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useTheme } from '../hooks/useTheme';
@@ -14,6 +14,17 @@ const STATUS_CLASS = { open: 'chip-easy', upcoming: 'chip-medium', closed: 'chip
 function formatDate(iso) {
   if (!iso) return '—';
   return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+// Turns accumulated time-on-task seconds into a compact "2h 14m" / "45m" /
+// "30s" string for the students table.
+function formatDuration(totalSeconds) {
+  const s = Math.max(0, Math.round(Number(totalSeconds) || 0));
+  const hours = Math.floor(s / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return `${s}s`;
 }
 
 function toDatetimeLocal(iso) {
@@ -218,22 +229,52 @@ function SubmissionHistory({ studentId, problemId }) {
 // ============================================================================
 // STUDENTS PANEL
 // ============================================================================
+// Sortable columns on the students table. `numeric: false` (email) sorts
+// alphabetically and defaults to ascending; every numeric/date column
+// defaults to descending on first click, since "biggest first" is what an
+// admin scanning for top/bottom performers wants for all five of these.
+const STUDENT_SORT_COLUMNS = [
+  { key: 'email', label: 'Email', numeric: false },
+  { key: 'problems_solved', label: 'Solved', numeric: true },
+  { key: 'total_submissions', label: 'Attempts', numeric: true, title: 'Total attempt numbers — every submission across every assignment' },
+  { key: 'total_seconds', label: 'Total time', numeric: true, title: 'True time-on-task: assignment open → final submission, revisits added in' },
+  { key: 'last_active_at', label: 'Last active', numeric: true, isDate: true, title: 'Most recent of: last submission, last time the assignment was open' },
+  { key: 'successful_test_cases', label: 'Tests passed', numeric: true, title: 'Test cases passed on each problem\'s best attempt, summed' },
+  { key: 'composite_score', label: 'Score', numeric: true, title: 'Efficiency score = tests passed / ((1 + attempts) × (1 + hours spent)) — higher = fast, few attempts, high success' },
+];
+
 function StudentsPanel({ onSelectStudent }) {
   const [students, setStudents] = useState(null);
+  const [assignments, setAssignments] = useState([]);
+  const [selectedProblemId, setSelectedProblemId] = useState(''); // '' = all assignments combined
   const [error, setError] = useState('');
   const [confirmingId, setConfirmingId] = useState(null);
   const [busyId, setBusyId] = useState(null);
+  const [sortKey, setSortKey] = useState('email');
+  const [sortDir, setSortDir] = useState('asc');
+
+  // Populate the "scope to assignment" dropdown once. Failing silently here
+  // is fine — worst case the dropdown just stays on "All assignments".
+  useEffect(() => {
+    axios.get(`${API}/api/problems`, { withCredentials: true })
+      .then((res) => setAssignments(res.data.problems))
+      .catch(() => {});
+  }, []);
 
   const fetchStudents = useCallback(async () => {
     try {
-      const res = await axios.get(`${API}/api/admin/students`, { withCredentials: true });
+      const res = await axios.get(`${API}/api/admin/students`, {
+        params: selectedProblemId ? { problemId: selectedProblemId } : {},
+        withCredentials: true,
+      });
       setStudents(res.data.students);
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to load students.');
     }
-  }, []);
+  }, [selectedProblemId]);
 
   useEffect(() => {
+    setStudents(null); // show the loading state while re-scoping to a new assignment
     fetchStudents();
   }, [fetchStudents]);
 
@@ -250,49 +291,107 @@ function StudentsPanel({ onSelectStudent }) {
     }
   };
 
+  const handleSort = (col) => {
+    if (sortKey === col.key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(col.key);
+      setSortDir(col.numeric ? 'desc' : 'asc');
+    }
+  };
+
+  const sortedStudents = useMemo(() => {
+    if (!students) return null;
+    const dir = sortDir === 'asc' ? 1 : -1;
+    const col = STUDENT_SORT_COLUMNS.find((c) => c.key === sortKey);
+    return [...students].sort((a, b) => {
+      if (!col?.numeric) {
+        return dir * String(a[sortKey] || '').localeCompare(String(b[sortKey] || ''));
+      }
+      const av = col.isDate ? (a[sortKey] ? new Date(a[sortKey]).getTime() : 0) : (a[sortKey] ?? 0);
+      const bv = col.isDate ? (b[sortKey] ? new Date(b[sortKey]).getTime() : 0) : (b[sortKey] ?? 0);
+      return dir * (av - bv);
+    });
+  }, [students, sortKey, sortDir]);
+
   if (error) return <div className="alert"><span className="alert-icon">!</span><span>{error}</span></div>;
-  if (!students) return <p className="sb-loading">Loading students…</p>;
-  if (students.length === 0) return <p className="sb-loading">No students yet.</p>;
 
   return (
-    <div className="panel admin-table-wrap">
-      <table className="admin-table">
-        <thead>
-          <tr>
-            <th>Email</th>
-            <th>Solved</th>
-            <th>Submissions</th>
-            <th>Last active</th>
-            <th aria-label="Actions" />
-          </tr>
-        </thead>
-        <tbody>
-          {students.map((s) => (
-            <tr key={s.id}>
-              <td>
-                <button type="button" className="auth-link admin-cell-strong" style={{ fontSize: '14px' }} onClick={() => onSelectStudent(s.id)}>
-                  {s.email}
-                </button>
-              </td>
-              <td>{s.problems_solved}</td>
-              <td>{s.total_submissions}</td>
-              <td>{formatDate(s.last_submission_at)}</td>
-              <td className="admin-cell-actions">
-                {confirmingId === s.id ? (
-                  <span className="confirm-row">
-                    <button type="button" className="btn btn-danger btn-sm" disabled={busyId === s.id} onClick={() => handleRemove(s.id)}>
-                      {busyId === s.id ? 'Removing…' : 'Confirm'}
-                    </button>
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConfirmingId(null)}>Cancel</button>
-                  </span>
-                ) : (
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConfirmingId(s.id)}>Remove</button>
-                )}
-              </td>
-            </tr>
+    <div>
+      <div className="admin-toolbar" style={{ justifyContent: 'flex-start', gap: '10px', alignItems: 'center' }}>
+        <label htmlFor="assignment-filter" style={{ fontSize: '13px', color: 'var(--text-dim)' }}>
+          Scope stats to
+        </label>
+        <select
+          id="assignment-filter"
+          className="assignment-select"
+          value={selectedProblemId}
+          onChange={(e) => setSelectedProblemId(e.target.value)}
+        >
+          <option value="">All assignments (combined)</option>
+          {assignments.map((a, idx) => (
+            <option key={a.id} value={a.id}>{idx + 1}. {a.title}</option>
           ))}
-        </tbody>
-      </table>
+        </select>
+      </div>
+
+      {!students && <p className="sb-loading">Loading students…</p>}
+      {students && students.length === 0 && <p className="sb-loading">No students yet.</p>}
+
+      {students && students.length > 0 && (
+        <div className="panel admin-table-wrap">
+          <table className="admin-table">
+            <thead>
+              <tr>
+                {STUDENT_SORT_COLUMNS.map((col) => (
+                  <th
+                    key={col.key}
+                    className="admin-th-sortable"
+                    title={col.title}
+                    aria-sort={sortKey === col.key ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                    onClick={() => handleSort(col)}
+                  >
+                    {col.label}
+                    <span className="admin-th-sort-arrow">
+                      {sortKey === col.key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+                    </span>
+                  </th>
+                ))}
+                <th aria-label="Actions" />
+              </tr>
+            </thead>
+            <tbody>
+              {sortedStudents.map((s) => (
+                <tr key={s.id}>
+                  <td>
+                    <button type="button" className="auth-link admin-cell-strong" style={{ fontSize: '14px' }} onClick={() => onSelectStudent(s.id)}>
+                      {s.email}
+                    </button>
+                  </td>
+                  <td>{s.problems_solved}</td>
+                  <td>{s.total_submissions}</td>
+                  <td>{formatDuration(s.total_seconds)}</td>
+                  <td>{formatDate(s.last_active_at)}</td>
+                  <td>{s.successful_test_cases}</td>
+                  <td>{s.composite_score.toFixed(3)}</td>
+                  <td className="admin-cell-actions">
+                    {confirmingId === s.id ? (
+                      <span className="confirm-row">
+                        <button type="button" className="btn btn-danger btn-sm" disabled={busyId === s.id} onClick={() => handleRemove(s.id)}>
+                          {busyId === s.id ? 'Removing…' : 'Confirm'}
+                        </button>
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConfirmingId(null)}>Cancel</button>
+                      </span>
+                    ) : (
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConfirmingId(s.id)}>Remove</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

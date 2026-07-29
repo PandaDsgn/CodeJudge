@@ -4,7 +4,7 @@ import { API } from '../config';
 
 const AuthContext = createContext(null);
 
-const TOKEN_KEY = 'codejudge_token';
+export const TOKEN_KEY = 'codejudge_token';
 
 // Sets (or clears) the Authorization header on axios's shared defaults —
 // since every page imports the same 'axios' module instance, this one call

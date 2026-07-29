@@ -40,6 +40,25 @@
 
 .sample-test-card .btn { align-self: flex-start; margin-top: 2px; }
 
+/* Neutral chip variant — used for "not submitted" on the assignments list.
+   Sits alongside wherever .chip-easy / .chip-medium / .chip-hard are already
+   defined; if that's a different stylesheet than this one, add this rule
+   there instead so it inherits the same --surface-2 / --border tokens. */
+.chip-neutral {
+  background: var(--surface-2);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+.chip-neutral .dot { background: var(--text-dim); }
+
+/* Serial number prefix on each assignment card in the list, e.g. "3. Two Sum".
+   Same caveat as .chip-neutral above: add this next to wherever
+   .problem-card-title itself is actually defined if that's not this file. */
+.problem-card-index {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
 .field-group-label {
   font-size: 12px;
   font-weight: 600;
@@ -49,6 +68,40 @@
 }
 
 .btn-sm { padding: 6px 12px; font-size: 12.5px; }
+
+
+/* Seven-segment "digital clock" font for the on-screen timer, self-hosted
+   via Fontsource's CDN (open-source, SIL OFL license). Only pulled in here
+   since .sb-timer is the only place it's used — if you end up wanting it
+   elsewhere too, this @font-face is safe to hoist up into index.css as-is. */
+@font-face {
+  font-family: 'DSEG7 Classic';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url(https://cdn.jsdelivr.net/fontsource/fonts/dseg7-classic@latest/latin-400-normal.woff2) format('woff2'),
+       url(https://cdn.jsdelivr.net/fontsource/fonts/dseg7-classic@latest/latin-400-normal.woff) format('woff');
+}
+
+/* Live time-on-task counter shown next to the difficulty chip on the
+   assignment page. Counts up while the tab is visible; the ticking itself
+   is purely cosmetic — the persisted value it's seeded from, and continues
+   to sync to, is the real problem_time_logs total on the server. Styled
+   like a glowing blue LED digital clock. */
+.sb-timer {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-family: 'DSEG7 Classic', var(--font-mono);
+  font-size: 17px;
+  color: var(--blue);
+  text-shadow: 0 0 4px var(--blue), 0 0 12px var(--blue-dim);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
 
 
 /* ---------- LeetCode Style Test Case Pane ---------- */
@@ -186,4 +239,20 @@
   font-size: 13px;
   text-align: center;
   margin-top: 24px;
+}
+
+/* Sortable column headers on the admin students table. Lives here for now —
+   move it next to your other .admin-table rules in admin.css if that's a
+   separate stylesheet, same as .chip-neutral / .problem-card-index above. */
+.admin-th-sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.admin-th-sortable:hover { color: var(--text-h); }
+.admin-th-sort-arrow {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 10px;
+  color: var(--accent);
 }
